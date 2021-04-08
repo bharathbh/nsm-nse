@@ -20,19 +20,19 @@ import (
 	"flag"
 	"fmt"
 	"os"
-	//"strings"
+	"strings"
 
-	//"github.com/networkservicemesh/networkservicemesh/controlplane/api/networkservice"
+	"github.com/networkservicemesh/networkservicemesh/controlplane/api/networkservice"
 	"github.com/networkservicemesh/networkservicemesh/pkg/tools"
 	"github.com/networkservicemesh/networkservicemesh/sdk/common"
 	"github.com/networkservicemesh/networkservicemesh/sdk/endpoint"
-	//"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus"
 	"github.com/sirupsen/logrus"
 
 	"github.com/cisco-app-networking/nsm-nse/pkg/metrics"
-	//"github.com/cisco-app-networking/nsm-nse/pkg/nseconfig"
-	//"github.com/cisco-app-networking/nsm-nse/pkg/universal-cnf/ucnf"
-	//"github.com/cisco-app-networking/nsm-nse/pkg/universal-cnf/vppagent"
+	"github.com/cisco-app-networking/nsm-nse/pkg/nseconfig"
+	"github.com/cisco-app-networking/nsm-nse/pkg/universal-cnf/ucnf"
+	"github.com/cisco-app-networking/nsm-nse/pkg/universal-cnf/vppagent"
 )
 
 const (
@@ -61,7 +61,6 @@ func (mf *Flags) Process() {
 	flag.Parse()
 }
 
-/*
 type vL3CompositeEndpoint struct {
 }
 
@@ -87,36 +86,6 @@ func (e vL3CompositeEndpoint) AddCompositeEndpoints(nsConfig *common.NSConfigura
 	return &compositeEndpoints
 }
 
-// exported the symbol named "CompositeEndpointPlugin"
-
-
-func main() {
-	// Capture signals to cleanup before exiting
-	logrus.Info("starting endpoint")
-	c := tools.NewOSSignalChannel()
-
-	logrus.SetOutput(os.Stdout)
-	logrus.SetLevel(logrus.TraceLevel)
-
-	mainFlags := &Flags{}
-	mainFlags.Process()
-
-	InitializeMetrics()
-
-	// Capture signals to cleanup before exiting
-	prometheus.NewBuildInfoCollector()
-
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	vl3 := vL3CompositeEndpoint{}
-	ucnfNse := ucnf.NewUcnfNse(mainFlags.ConfigPath, mainFlags.Verify, &vppagent.UniversalCNFVPPAgentBackend{}, vl3, ctx)
-	logrus.Info("endpoint started")
-
-	defer ucnfNse.Cleanup()
-	<-c
-}
-*/
-
 func InitializeMetrics() {
 	metricsPort := os.Getenv(metricsPortEnv)
 	if metricsPort == "" {
@@ -128,7 +97,7 @@ func InitializeMetrics() {
 }
 
 var (
-	nsmEndpoint *endpoint.NsmEndpoint
+	nsmEndpoint endpoint.NsmEndpoint
 )
 
 func main() {
@@ -136,41 +105,62 @@ func main() {
 	// Capture signals to cleanup before exiting
 	c := tools.NewOSSignalChannel()
 
-	configuration := common.FromEnv()
-	/*
-	composite := endpoint.NewCompositeEndpoint(
-		endpoint.NewMonitorEndpoint(nil),
-		endpoint.NewIpamEndpoint(nil),
-		endpoint.NewConnectionEndpoint(nil))
-        */
-	dstRoutes := endpoint.CreateRouteMutator([]string{os.Getenv("DST_ROUTES")})
-	composite := endpoint.NewCompositeEndpoint(
-		endpoint.NewMonitorEndpoint(configuration),
-		endpoint.NewConnectionEndpoint(configuration),
-		endpoint.NewIpamEndpoint(configuration),
-		endpoint.NewCustomFuncEndpoint("route", dstRoutes),
-	)
+	logrus.SetOutput(os.Stdout)
+	logrus.SetLevel(logrus.TraceLevel)
 
-	nsme, err := endpoint.NewNSMEndpoint(context.Background(), configuration, composite)
-	if err != nil {
-		logrus.Fatalf("%v", err)
+	dataplane := os.Getenv("DATAPLANE")
+
+	if dataplane == "vpp" {
+
+		mainFlags := &Flags{}
+		mainFlags.Process()
+
+		InitializeMetrics()
+
+		// Capture signals to cleanup before exiting
+		prometheus.NewBuildInfoCollector()
+
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		vl3 := vL3CompositeEndpoint{}
+		ucnfNse := ucnf.NewUcnfNse(mainFlags.ConfigPath, mainFlags.Verify, &vppagent.UniversalCNFVPPAgentBackend{}, vl3, ctx)
+		logrus.Info("endpoint started")
+
+		defer ucnfNse.Cleanup()
+		<-c
+
+	} else {
+
+		configuration := common.FromEnv()
+
+		dstRoutes := endpoint.CreateRouteMutator([]string{os.Getenv("DST_ROUTES")})
+		composite := endpoint.NewCompositeEndpoint(
+			endpoint.NewMonitorEndpoint(configuration),
+			endpoint.NewConnectionEndpoint(configuration),
+			endpoint.NewIpamEndpoint(configuration),
+			endpoint.NewCustomFuncEndpoint("route", dstRoutes),
+		)
+
+		nsme, err := endpoint.NewNSMEndpoint(context.Background(), configuration, composite)
+		if err != nil {
+			logrus.Fatalf("%v", err)
+		}
+
+		nsmEndpoint = nsme
+
+		err = nsme.Start()
+		if err != nil {
+			logrus.Fatalf("Unable to start the endpoint: %v", err)
+		}
+
+		logrus.Infof("Started NSE --got name %s", nsme.GetName())
+		defer func() { _ = nsme.Delete() }()
+
+		// Capture signals to cleanup before exiting
+		<-c
 	}
-	//nsmEndpoint = nsme
-	//_ = nsmEndpoint.Start()
-	err = nsme.Start()
-	if err != nil {
-		logrus.Fatalf("Unable to start the endpoint: %v", err)
-	}
-
-	logrus.Infof("Started NSE --got name %s", nsme.GetName())
-	defer func() { _ = nsme.Delete() }()
-
-	// Capture signals to cleanup before exiting
-	<-c
 }
 
 func GetMyNseName() string {
-	//return nsmEndpoint.GetName()
-	return "vl3-nse"
+	return nsmEndpoint.GetName()
 }
-
