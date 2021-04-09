@@ -26,6 +26,7 @@ import (
 	"github.com/networkservicemesh/networkservicemesh/pkg/tools"
 	"github.com/networkservicemesh/networkservicemesh/sdk/common"
 	"github.com/networkservicemesh/networkservicemesh/sdk/endpoint"
+	"github.com/networkservicemesh/networkservicemesh/controlplane/api/connectioncontext"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/sirupsen/logrus"
 
@@ -100,6 +101,10 @@ var (
 	nsmEndpoint endpoint.NsmEndpoint
 )
 
+func getStringListFromString(str string) []string {
+	return strings.Split(str, ",")
+}
+
 func main() {
 
 	// Capture signals to cleanup before exiting
@@ -133,13 +138,29 @@ func main() {
 
 		configuration := common.FromEnv()
 
-		dstRoutes := endpoint.CreateRouteMutator([]string{os.Getenv("DST_ROUTES")})
-		composite := endpoint.NewCompositeEndpoint(
+		endpoints := []networkservice.NetworkServiceServer{
 			endpoint.NewMonitorEndpoint(configuration),
 			endpoint.NewConnectionEndpoint(configuration),
 			endpoint.NewIpamEndpoint(configuration),
-			endpoint.NewCustomFuncEndpoint("route", dstRoutes),
-		)
+		}
+
+		dstRoutes := os.Getenv("DST_ROUTES")
+		if dstRoutes != "" {
+			dstRouteMutator := endpoint.CreateRouteMutator(getStringListFromString(dstRoutes))
+			endpoints = append(endpoints, endpoint.NewCustomFuncEndpoint("route", dstRouteMutator))
+		}
+
+		dnsNameServers := os.Getenv("DNS_NAMESERVERS")
+		dnsDomains := os.Getenv("DNS_DOMAINS")
+		if dnsNameServers != "" {
+			dnsMutator := endpoint.NewAddDNSConfigs(&connectioncontext.DNSConfig{
+				DnsServerIps: getStringListFromString(dnsNameServers),
+				SearchDomains: getStringListFromString(dnsDomains),
+			})
+			endpoints = append(endpoints, dnsMutator)
+		}
+
+		composite := endpoint.NewCompositeEndpoint(endpoints...)
 
 		nsme, err := endpoint.NewNSMEndpoint(context.Background(), configuration, composite)
 		if err != nil {
